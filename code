@@ -1,0 +1,139 @@
+import random
+import requests
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
+
+# Function to load words from a given URL
+def load_words_from_url(url):
+    try:
+        response = requests.get(url)
+        response.raise_for_status()  # Raise an error for bad status codes
+        words = response.text.splitlines()
+        return [word for word in words if word.isalpha() and len(word) > 1]  # Filter for valid words
+    except requests.exceptions.RequestException as e:
+        print(f"Error loading words: {e}")
+        return []
+
+# URL for the word bank
+url = 'https://raw.githubusercontent.com/dwyl/english-words/refs/heads/master/words_alpha.txt'
+all_words = load_words_from_url(url)
+
+if not all_words:
+    print("Failed to load words.")
+else:
+    print(f"Loaded {len(all_words)} words successfully.")
+
+# Memory to store the correct answers for better guessing strategies
+correct_answers = []
+
+# Function to provide feedback based on the guess and the target word
+def get_feedback(guess, target):
+    feedback = []
+    for i in range(len(guess)):
+        if guess[i] == target[i]:
+            feedback.append((guess[i], 'correct'))
+        elif guess[i] in target:
+            feedback.append((guess[i], 'present'))
+        else:
+            feedback.append((guess[i], 'absent'))
+    return feedback
+
+# Function to check if a word matches the feedback given a guess
+def match_feedback(word, guess, feedback):
+    for i in range(len(feedback)):
+        letter, status = feedback[i]
+        if status == 'correct' and word[i] != letter:
+            return False
+        if status == 'present' and (letter not in word or word[i] == letter):
+            return False
+        if status == 'absent' and letter in word:
+            return False
+    return True
+
+# Function for the AI to guess the word
+def ai_guess(target_word, possible_words):
+    attempts = 0
+    possible_words = [word for word in possible_words if len(word) == len(target_word)]
+    while possible_words:
+        guess = random.choice(possible_words)
+        attempts += 1
+        print("Attempt", attempts, ":", guess)
+
+        if guess == target_word:
+            print("The AI guessed the word in", attempts, "attempts!")
+            correct_answers.append(target_word)  # Store the correct answer for better strategies
+            # Send the final answer to Google Sheets
+            send_to_google_sheets(target_word)
+            return attempts
+
+        feedback = get_feedback(guess, target_word)
+        possible_words = [word for word in possible_words if match_feedback(word, guess, feedback)]
+
+        if not possible_words:
+            print("The AI ran out of possible words.")
+            break
+
+    print("The AI failed to guess the word.")
+    return attempts
+
+# Function to send the final answer to Google Sheets
+def send_to_google_sheets(answer):
+    # Set up the credentials and authorize the client
+    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/spreadsheets"]
+    credentials = ServiceAccountCredentials.from_json_keyfile_name("/home/cpinn/Downloads/credentials.json", scope)
+    client = gspread.authorize(credentials)
+
+    # Open the spreadsheet by its URL and select the sheet
+    sheet = client.open_by_url("https://docs.google.com/spreadsheets/d/1AiOTGTW1DAUAObBKxyv6Y9hnQzj2KWDc9YOd5O9_BCA/edit?gid=0")
+    worksheet = sheet.get_worksheet(0)  # Replace with the desired worksheet index or name
+
+    # Append the answer to the sheet
+    worksheet.append_row([answer])
+
+# Function to train the AI with all word lengths
+def train_ai(rounds):
+    print("AI Training Started")
+    total_attempts = 0
+    # Filter words based on length for training
+    unique_word_lengths = set(len(word) for word in all_words)
+    
+    for _ in range(rounds):
+        word_length = random.choice(list(unique_word_lengths))  # Select a random length
+        possible_words = [word for word in all_words if len(word) == word_length]
+        target_word = random.choice(possible_words)
+        print(f"Training on {word_length}-letter words. Target word is hidden.")
+        attempts = ai_guess(target_word, possible_words[:])
+        total_attempts += attempts
+
+    print("Training Complete. Average attempts:", total_attempts / rounds)
+
+# Main function to run the game
+def run_game():
+    print("Welcome to the Word Guessing Game!")
+    while True:
+        print("\nOptions:")
+        print("1. Let AI guess your word.")
+        print("2. Train the AI.")
+        print("3. Exit.")
+        choice = input("Enter your choice: ").strip()
+
+        if choice == "1":
+            target_word = input("Enter a word (minimum 2 letters): ").strip().lower()
+            if len(target_word) < 2 or not target_word.isalpha() or target_word not in all_words:
+                print("Invalid word. Please try again.")
+            else:
+                ai_guess(target_word, all_words[:])
+        elif choice == "2":
+            rounds = input("Enter number of training rounds: ").strip()
+            if rounds.isdigit():
+                train_ai(int(rounds))
+            else:
+                print("Invalid input. Enter a number.")
+        elif choice == "3":
+            print("Goodbye!")
+            break
+        else:
+            print("Invalid choice. Please try again.")
+
+# Run the game
+run_game()
